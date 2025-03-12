@@ -4,7 +4,9 @@ from celery import shared_task
 import requests
 from .models import Server
 from .scraper import scrape_server_details  # Import from scraper.py
+import logging
 
+logger = logging.getLogger(__name__)
 @shared_task
 def scrape_and_store_server_data():
     url = "https://just-wiped.net/rust_servers"
@@ -42,6 +44,8 @@ def scrape_and_store_server_data():
                         max_group=details["max_group"]
                     )
                     print(f"Inserted new server: {details['server_name']}")
+                    logger.info(f"Inserted new server: {details['server_name']} - {details['server_id']}")
+                    
                 else:
                     print(f"Server already exists: {details['server_name']}")
     else:
