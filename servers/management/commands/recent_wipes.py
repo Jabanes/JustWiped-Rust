@@ -7,6 +7,8 @@ from django.utils import timezone
 from datetime import datetime
 from servers.models import Server, WipeSchedule
 import pytz  # Add this import at the top
+import json
+import os
 
 class Command(BaseCommand):
     help = 'Scrapes recently wiped servers from Just-Wiped and saves new servers to the database'
@@ -242,14 +244,39 @@ class Command(BaseCommand):
                     )
                 )
 
+    def save_existing_servers_to_json(self, existing_servers):
+        """Save existing server names to a JSON file."""
+        # Extract only the names from the existing_servers list
+        server_names = [server['name'] for server in existing_servers]
+        
+        # Remove duplicates while preserving order
+        unique_server_names = list(dict.fromkeys(server_names))
+        
+        # Define the file path (in the same directory as the script)
+        file_path = os.path.join(os.path.dirname(__file__), 'existing_servers.json')
+        
+        try:
+            with open(file_path, 'w', encoding='utf-8') as f:
+                json.dump(unique_server_names, f, indent=4)
+            
+            self.stdout.write(
+                self.style.SUCCESS(f"Saved {len(unique_server_names)} server names to {file_path}")
+            )
+        except Exception as e:
+            self.stdout.write(
+                self.style.ERROR(f"Error saving server names to JSON: {e}")
+            )
+
     def handle(self, *args, **kwargs):
         """Main function to run the scraping process."""
         self.stdout.write(self.style.NOTICE("Starting scraping process..."))
         
-        # First, process the main URLs
-        urls = self.get_urls()
+        # List to store existing server names that we find during initial scrape
+        existing_servers = []
         total_servers_processed = 0
 
+        # First phase: Process main URLs and collect existing servers
+        urls = self.get_urls()
         for url in urls:
             self.stdout.write(self.style.NOTICE(f"\nProcessing URL: {url}"))
             html = self.fetch_data(url)
@@ -257,6 +284,14 @@ class Command(BaseCommand):
             if html:
                 servers_data = self.parse_html(html)
                 if servers_data:
+                    # Track existing servers during parsing
+                    for server in servers_data:
+                        if server["is_existing"]:
+                            existing_servers.append({
+                                "name": server["server_name"],
+                                "id": server["server_id"]
+                            })
+                    
                     self.update_database(servers_data)
                     total_servers_processed += len(servers_data)
                     self.stdout.write(
@@ -267,10 +302,9 @@ class Command(BaseCommand):
             else:
                 self.stdout.write(self.style.ERROR(f"Failed to retrieve content from {url}"))
 
-            # Add delay between URLs to avoid rate limiting
             time.sleep(random.uniform(2, 5))
 
-        # Now process paginated URLs
+        # Process paginated URLs
         self.stdout.write(self.style.NOTICE("\nStarting pagination scraping..."))
         page = 1
         max_pages = 11
@@ -282,13 +316,20 @@ class Command(BaseCommand):
             html = self.fetch_data(paginated_url)
             
             if html:
-                # Check if page has any servers
                 if not self.has_servers(html):
                     self.stdout.write(self.style.WARNING(f"No more servers found on page {page}. Stopping pagination."))
                     break
 
                 servers_data = self.parse_html(html)
                 if servers_data:
+                    # Track existing servers during parsing
+                    for server in servers_data:
+                        if server["is_existing"]:
+                            existing_servers.append({
+                                "name": server["server_name"],
+                                "id": server["server_id"]
+                            })
+                    
                     self.update_database(servers_data)
                     total_servers_processed += len(servers_data)
                     self.stdout.write(
@@ -301,8 +342,10 @@ class Command(BaseCommand):
                 break
 
             page += 1
-            # Add delay between pages to avoid rate limiting
             time.sleep(random.uniform(2, 5))
+
+        # Save existing servers to JSON file after all scraping is done
+        self.save_existing_servers_to_json(existing_servers)
 
         self.stdout.write(
             self.style.SUCCESS(
